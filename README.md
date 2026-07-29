@@ -2,8 +2,8 @@
 
 A statewide construction intelligence dashboard for Kentucky, modeled on the
 Greater Cincinnati Construction Radar. It pulls recent building permits from
-Kentucky open data sources, classifies each project by market, scores it for
-electrical material opportunity (1-10), and displays everything on a searchable
+Kentucky open data sources, classifies each project by market, scores each one 1-10 based on
+project dollars and proximity to your branch, and displays everything on a searchable
 map + table hosted for free on GitHub Pages.
 
 ## How it works
@@ -78,9 +78,12 @@ All knobs are at the top of `scraper.py`:
 - `DAYS_BACK` — lookback window for issue dates (default 90)
 - `MIN_VALUE` — minimum project value (default $25,000)
 - `EXCLUDE_KEYWORDS` — project types to skip
-- Scoring weights live in `electrical_score()` — currently tuned for
-  electrical distribution (hospitals, manufacturing, data centers, and
-  distilleries score highest)
+- `BRANCH_NAME` / `BRANCH_LATITUDE` / `BRANCH_LONGITUDE` — proximity
+  scoring is measured from here. Set these to your store's coordinates
+  (right-click the spot in Google Maps and copy the numbers).
+- Scoring weights live in `value_points()` and `proximity_points()`:
+  up to 5 points for project dollars, up to 5 points for distance
+  (5 pts within 10 miles, down to 0 beyond 100 miles)
 
 ## Notes
 

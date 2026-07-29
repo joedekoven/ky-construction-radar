@@ -42,6 +42,11 @@ LOUISVILLE_LAYER_URLS = [
         "services/Louisville_Metro_KY_Active_Permits/"
         "FeatureServer/0"
     ),
+    (
+        "https://services1.arcgis.com/79kfd2K6fskCAkyg/arcgis/rest/"
+        "services/Louisville_Metro_KY_All_Permits_(Historical)/"
+        "FeatureServer/0"
+    ),
 ]
 
 LOUISVILLE_SOURCE_LABEL = "Louisville Metro Construction Review"
@@ -51,8 +56,22 @@ LOUISVILLE_PORTAL_URL = (
     "services/online-permit-search"
 )
 
+# ------------------------------------------------------------
+# YOUR BRANCH LOCATION - proximity scoring is measured from here.
+# Set this to your store's address coordinates (right-click the
+# spot in Google Maps and copy the numbers).
+# ------------------------------------------------------------
+BRANCH_NAME = "Lexington branch"
+BRANCH_LATITUDE = 38.0406
+BRANCH_LONGITUDE = -84.5037
+
 # How far back we look for permits (by issue date)
 DAYS_BACK = 90
+
+# If the date filter wipes out everything (some county feeds are
+# point-in-time snapshots with old issue dates), keep this many of
+# the highest-value permits anyway so the dashboard is never empty.
+FALLBACK_KEEP = 150
 
 # Ignore most tiny projects
 MIN_VALUE = 25_000
@@ -64,24 +83,19 @@ OUTPUT_FILE = "projects.json"
 CSV_SOURCE_FOLDER = "sources"
 
 
+# Residential IS in scope. Only skip trivial work types that will
+# never move meaningful material.
 EXCLUDE_KEYWORDS = [
-    "single family",
-    "single-family",
-    "sngl fam",
-    "two family",
-    "2 family",
-    "duplex",
     "deck",
     "fence",
     "swimming pool",
     "above ground pool",
     "inground pool",
-    "residential garage",
-    "detached garage",
     "shed",
     "carport",
-    "mobile home",
-    "manufactured home",
+    "demolition",
+    "wrecking",
+    "sign permit",
 ]
 
 
@@ -275,9 +289,17 @@ def classify_market(description, proposed_use, permit_type, workclass):
     if any(word in text for word in [
         "apartment", "apartments", "multifamily", "multi-family",
         "condominium", "condominiums", "student housing",
-        "senior living", "r-1", "r-2", "r-3", "1-2-3 fm",
+        "senior living", "r-1", "r-2", "1-2-3 fm",
     ]):
-        return "Multifamily / Residential"
+        return "Multifamily"
+
+    if any(word in text for word in [
+        "single family", "single-family", "sngl fam", "duplex",
+        "two family", "2 family", "townhome", "townhouse",
+        "dwelling", "residence", "residential", "r-3", "r-4",
+        "home addition", "basement finish", "garage",
+    ]):
+        return "Residential"
 
     if any(word in text for word in [
         "hotel", "motel", "hospitality", "lodging", "resort",
@@ -312,61 +334,74 @@ def classify_market(description, proposed_use, permit_type, workclass):
 
 
 # ============================================================
-# ELECTRICAL OPPORTUNITY SCORE
+# OPPORTUNITY SCORE  =  DOLLARS (0-5)  +  PROXIMITY (0-5)
 # ============================================================
 
-def electrical_score(description, proposed_use, workclass, value):
+import math
 
-    text = " ".join([
-        clean_text(description),
-        clean_text(proposed_use),
-        clean_text(workclass),
-    ]).lower()
 
-    score = 3
-    reasons = []
+def distance_miles(latitude, longitude):
+    """Great-circle distance from the branch, in miles."""
+    if latitude is None or longitude is None:
+        return None
+    try:
+        lat1 = math.radians(BRANCH_LATITUDE)
+        lon1 = math.radians(BRANCH_LONGITUDE)
+        lat2 = math.radians(float(latitude))
+        lon2 = math.radians(float(longitude))
+    except (TypeError, ValueError):
+        return None
 
+    dlat = lat2 - lat1
+    dlon = lon2 - lon1
+
+    a = (
+        math.sin(dlat / 2) ** 2
+        + math.cos(lat1) * math.cos(lat2)
+        * math.sin(dlon / 2) ** 2
+    )
+    return round(3958.8 * 2 * math.asin(math.sqrt(a)), 1)
+
+
+def value_points(value):
     if value >= 20_000_000:
-        score += 4
-        reasons.append("very large construction value")
-    elif value >= 5_000_000:
-        score += 3
-        reasons.append("large construction value")
-    elif value >= 1_000_000:
-        score += 2
-        reasons.append("significant construction value")
-    elif value >= 250_000:
-        score += 1
-        reasons.append("meaningful commercial project value")
+        return 5, "very large project value"
+    if value >= 5_000_000:
+        return 4, "large project value"
+    if value >= 1_000_000:
+        return 3, "significant project value"
+    if value >= 250_000:
+        return 2, "solid project value"
+    if value >= 100_000:
+        return 1, "moderate project value"
+    return 0, None
 
-    very_high_types = [
-        "hospital", "manufacturing", "factory",
-        "data center", "industrial", "distillery",
-    ]
 
-    high_types = [
-        "school", "university", "apartment", "multifamily",
-        "hotel", "warehouse", "mixed use", "mixed-use",
-        "distribution",
-    ]
+def proximity_points(miles):
+    if miles is None:
+        return 0, "distance unknown"
+    if miles <= 10:
+        return 5, f"{miles} mi from {BRANCH_NAME}"
+    if miles <= 25:
+        return 4, f"{miles} mi from {BRANCH_NAME}"
+    if miles <= 50:
+        return 3, f"{miles} mi from {BRANCH_NAME}"
+    if miles <= 75:
+        return 2, f"{miles} mi from {BRANCH_NAME}"
+    if miles <= 100:
+        return 1, f"{miles} mi from {BRANCH_NAME}"
+    return 0, f"{miles} mi from {BRANCH_NAME} (outside radius)"
 
-    if any(word in text for word in very_high_types):
-        score += 3
-        reasons.append("electrically intensive project type")
-    elif any(word in text for word in high_types):
-        score += 2
-        reasons.append("strong potential electrical material demand")
 
-    if "new" in text or "addition" in text:
-        score += 1
-        reasons.append("new construction or expansion")
+def opportunity_score(value, miles):
+    points_v, reason_v = value_points(value)
+    points_p, reason_p = proximity_points(miles)
 
-    score = min(max(score, 1), 10)
+    score = min(max(points_v + points_p, 1), 10)
 
+    reasons = [reason for reason in [reason_p, reason_v] if reason]
     if not reasons:
-        reasons.append(
-            "potential commercial electrical material opportunity"
-        )
+        reasons.append("potential material opportunity")
 
     return score, "; ".join(reasons)
 
@@ -392,8 +427,22 @@ def within_lookback(issued):
 # SOURCE 1: LOUISVILLE METRO (ArcGIS)
 # ============================================================
 
-def fetch_arcgis_features(layer_url):
-    """Page through an ArcGIS feature layer and return all rows."""
+def fetch_arcgis_features(layer_url, max_records=20_000):
+    """
+    Page through an ArcGIS feature layer, newest rows first,
+    and return up to max_records rows.
+    """
+
+    # Ask the layer for its object ID field name so we can sort
+    # descending (newest records have the highest IDs).
+    order_field = None
+    try:
+        info = http_get_json(layer_url + "?f=json")
+        order_field = info.get("objectIdField") or info.get(
+            "objectIdFieldName"
+        )
+    except Exception:
+        pass
 
     features = []
     offset = 0
@@ -407,6 +456,9 @@ def fetch_arcgis_features(layer_url):
             "resultOffset": str(offset),
             "resultRecordCount": str(page_size),
         }
+
+        if order_field:
+            query["orderByFields"] = f"{order_field} DESC"
 
         url = layer_url + "/query?" + urllib.parse.urlencode(query)
         data = http_get_json(url)
@@ -423,7 +475,7 @@ def fetch_arcgis_features(layer_url):
         offset += page_size
 
         # Safety valve
-        if offset > 50_000:
+        if offset >= max_records:
             break
 
     return features
@@ -445,23 +497,54 @@ def get_field(attributes, *names):
 
 def build_louisville_projects():
 
+    def has_recent_data(rows):
+        """True if any of the first rows was issued in the window."""
+        for row in rows[:300]:
+            issued = parse_date(
+                get_field(
+                    row.get("attributes", {}),
+                    "ISSUEDATE", "IssueDate", "ISSUEDDATE",
+                )
+            )
+            if issued is not None and within_lookback(issued):
+                return True
+        return False
+
     features = []
-    used_url = None
+    backup_features = []
 
     for layer_url in LOUISVILLE_LAYER_URLS:
         try:
-            print(f"Downloading Louisville permits from:\n  {layer_url}")
-            features = fetch_arcgis_features(layer_url)
-            if features:
-                used_url = layer_url
+            print(f"Trying Louisville layer:\n  {layer_url}")
+            rows = fetch_arcgis_features(layer_url)
+
+            if not rows:
+                print("  ...returned no rows, trying next URL.")
+                continue
+
+            if has_recent_data(rows):
+                print(f"  ...has recent permits. Using this layer.")
+                features = rows
                 break
-            print("  ...layer returned no rows, trying next URL.")
+
+            print(
+                "  ...responded but has no permits in the lookback "
+                "window (stale snapshot?). Keeping as backup."
+            )
+            if not backup_features:
+                backup_features = rows
+
         except Exception as error:
             print(f"  WARNING: layer failed ({error}), trying next URL.")
+
+    if not features and backup_features:
+        print("No layer had recent data; using best available backup.")
+        features = backup_features
 
     print(f"Downloaded {len(features)} Louisville permit records.")
 
     projects = []
+    skipped = {"excluded type": 0, "below min value": 0}
 
     for feature in features:
         attributes = feature.get("attributes", {})
@@ -507,12 +590,12 @@ def build_louisville_projects():
             [permit_type, category, work_type]
         )
 
-        # Filters
+        # Filters (date handled after the loop so we can fall back)
         if is_excluded(combined_text):
+            skipped["excluded type"] += 1
             continue
         if value_numeric < MIN_VALUE:
-            continue
-        if not within_lookback(issued):
+            skipped["below min value"] += 1
             continue
 
         description = " - ".join(
@@ -558,14 +641,46 @@ def build_louisville_projects():
             "contractors": [contractor] if contractor else [],
             "source": LOUISVILLE_SOURCE_LABEL,
             "source_url": LOUISVILLE_PORTAL_URL,
+            "_issued": issued,
         })
 
-    print(
-        f"Kept {len(projects)} Louisville projects "
-        f"after filtering."
-    )
+    for reason, count in skipped.items():
+        print(f"  Skipped {count} records ({reason}).")
 
-    return projects
+    recent = [
+        project for project in projects
+        if within_lookback(project["_issued"])
+    ]
+
+    if recent:
+        print(
+            f"Kept {len(recent)} Louisville projects "
+            f"issued in the last {DAYS_BACK} days."
+        )
+        kept = recent
+    elif projects:
+        print(
+            f"WARNING: no permits within the last {DAYS_BACK} days - "
+            f"this layer may be a point-in-time snapshot. "
+            f"Keeping the {FALLBACK_KEEP} highest-value permits instead."
+        )
+        projects.sort(
+            key=lambda item: item["value_numeric"],
+            reverse=True,
+        )
+        kept = projects[:FALLBACK_KEEP]
+    else:
+        print(
+            "WARNING: zero Louisville projects survived filtering. "
+            "Check the skip counts above - if most records were "
+            "'below min value', the layer's cost field may be empty."
+        )
+        kept = []
+
+    for project in kept:
+        project.pop("_issued", None)
+
+    return kept
 
 
 # ============================================================
@@ -715,13 +830,20 @@ def main():
     if geocoded:
         print(f"Geocoded {geocoded} addresses.")
 
-    # Score every project
+    # Score every project: dollars (0-5) + proximity to branch (0-5)
     for project in projects:
-        score, reason = electrical_score(
-            project["description"],
-            project["proposed_use"],
-            project["work_class"],
+        miles = distance_miles(
+            project["latitude"],
+            project["longitude"],
+        )
+        project["distance_miles"] = miles
+        project["distance"] = (
+            f"{miles} mi" if miles is not None else "Unknown"
+        )
+
+        score, reason = opportunity_score(
             project["value_numeric"],
+            miles,
         )
         project["opportunity_score"] = score
         project["opportunity"] = f"{score}/10"
@@ -730,13 +852,14 @@ def main():
             datetime.now(timezone.utc).strftime("%Y-%m-%d")
         )
 
-    # Highest value opportunities first
+    # Best opportunities first: score, then closest, then biggest
     projects.sort(
         key=lambda item: (
-            item["opportunity_score"],
-            item["value_numeric"],
+            -item["opportunity_score"],
+            item["distance_miles"]
+            if item["distance_miles"] is not None else 9999,
+            -item["value_numeric"],
         ),
-        reverse=True,
     )
 
     with open(OUTPUT_FILE, "w", encoding="utf-8") as file:

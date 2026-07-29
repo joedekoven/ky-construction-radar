@@ -147,11 +147,25 @@ function updateSummary(projects) {
         .innerText = projects.length;
 
 
+    const residentialMarkets = [
+        "Residential",
+        "Multifamily",
+        "Multifamily / Residential"
+    ];
+
+    const commercialMarkets = [
+        "Commercial",
+        "Industrial",
+        "Warehouse / Logistics",
+        "Mixed-Use"
+    ];
+
+
     document
-        .getElementById("industrialProjects")
+        .getElementById("residentialProjects")
         .innerText = projects.filter(
             project =>
-                project.market === "Industrial"
+                residentialMarkets.includes(project.market)
         ).length;
 
 
@@ -159,7 +173,7 @@ function updateSummary(projects) {
         .getElementById("commercialProjects")
         .innerText = projects.filter(
             project =>
-                project.market === "Commercial"
+                commercialMarkets.includes(project.market)
         ).length;
 
 
@@ -242,6 +256,12 @@ function renderProjects(projects) {
             <td>
                 ${escapeHtml(
                     project.value || "Unknown"
+                )}
+            </td>
+
+            <td>
+                ${escapeHtml(
+                    project.distance || "Unknown"
                 )}
             </td>
 
@@ -498,10 +518,10 @@ function createProjectPopup(project) {
                 </div>
 
                 <div>
-                    <span>Status</span>
+                    <span>Distance</span>
                     <strong>
                         ${escapeHtml(
-                            project.status || "Unknown"
+                            project.distance || "Unknown"
                         )}
                     </strong>
                 </div>
