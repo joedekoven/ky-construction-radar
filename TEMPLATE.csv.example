@@ -1,0 +1,2 @@
+permit_number,project,address,city,county,status,value,contractor,description,work_class,issued_date,latitude,longitude,source,source_url
+B-2026-01234,New Warehouse - 100 Example Dr,100 Example Dr,Lexington,Fayette,Permit Issued,4500000,EXAMPLE BUILDERS LLC,New warehouse shell building,New,2026-07-15,,,LFUCG Building Inspection,https://www.lexingtonky.gov/departments/building-inspection
