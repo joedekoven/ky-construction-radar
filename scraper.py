@@ -109,6 +109,16 @@ def clean_text(value):
     return str(value).strip()
 
 
+def safe_float(value):
+    """Convert to float, or None if the value isn't numeric."""
+    if value in (None, ""):
+        return None
+    try:
+        return float(str(value).replace(",", "").strip())
+    except (TypeError, ValueError):
+        return None
+
+
 def parse_money(value):
     if value is None:
         return 0
@@ -614,14 +624,8 @@ def build_louisville_projects():
             "zipcode": zipcode,
             "neighborhood": neighborhood,
             "square_feet": square_feet,
-            "latitude": (
-                float(latitude)
-                if latitude not in (None, "") else None
-            ),
-            "longitude": (
-                float(longitude)
-                if longitude not in (None, "") else None
-            ),
+            "latitude": safe_float(latitude),
+            "longitude": safe_float(longitude),
             "type": permit_type or "Building",
             "market": classify_market(
                 description, category, permit_type, work_type
@@ -744,12 +748,8 @@ def build_csv_projects():
                     "zipcode": row.get("zipcode", ""),
                     "neighborhood": "",
                     "square_feet": None,
-                    "latitude": (
-                        float(latitude) if latitude else None
-                    ),
-                    "longitude": (
-                        float(longitude) if longitude else None
-                    ),
+                    "latitude": safe_float(latitude),
+                    "longitude": safe_float(longitude),
                     "type": row.get("type", "Building"),
                     "market": classify_market(
                         description,
@@ -790,8 +790,16 @@ def build_csv_projects():
 def main():
 
     projects = []
-    projects.extend(build_louisville_projects())
-    projects.extend(build_csv_projects())
+
+    try:
+        projects.extend(build_louisville_projects())
+    except Exception as error:
+        print(f"ERROR: Louisville source failed entirely: {error}")
+
+    try:
+        projects.extend(build_csv_projects())
+    except Exception as error:
+        print(f"ERROR: CSV sources failed: {error}")
 
     # De-duplicate by permit number (keep first occurrence)
     seen = set()
