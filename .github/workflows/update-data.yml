@@ -32,7 +32,10 @@ jobs:
           git add projects.json geocode_cache.json
           if git diff --cached --quiet; then
             echo "No data changes."
-          else
-            git commit -m "Automated data refresh $(date -u +%Y-%m-%d)"
-            git push
+            exit 0
           fi
+          git commit -m "Automated data refresh $(date -u +%Y-%m-%d)"
+          # If the repo changed while we ran, replay our commit on top,
+          # keeping OUR freshly scraped data if the same files conflict.
+          git pull --rebase -X theirs origin main
+          git push origin main
