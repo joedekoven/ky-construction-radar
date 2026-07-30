@@ -448,6 +448,126 @@ def within_lookback(issued):
 # SOURCE 1: LOUISVILLE METRO (ArcGIS)
 # ============================================================
 
+DISCOVERY_QUERIES = [
+    'Louisville Metro permits type:"Feature Service"',
+    'LOJIC construction permits type:"Feature Service"',
+    'Jefferson County Kentucky building permits type:"Feature Service"',
+]
+
+DISCOVERY_EXCLUDE = [
+    "right of way", "right-of-way", "apcd", "air", "burn",
+    "gasoline", "alcohol", "abc", "tank", "sign",
+]
+
+
+def discover_louisville_services():
+    """
+    Ask ArcGIS Online's public search API for Louisville permit
+    feature services. Self-healing: if the city moves its data
+    again, this finds the new home automatically.
+    """
+
+    found = []
+
+    for query in DISCOVERY_QUERIES:
+        params = urllib.parse.urlencode({
+            "q": query,
+            "f": "json",
+            "num": "30",
+            "sortField": "modified",
+            "sortOrder": "desc",
+        })
+
+        try:
+            data = http_get_json(
+                "https://www.arcgis.com/sharing/rest/search?" + params
+            )
+        except Exception as error:
+            print(f"  Discovery query failed: {error}")
+            continue
+
+        for item in data.get("results", []):
+            url = (item.get("url") or "").rstrip("/")
+            title = (item.get("title") or "").lower()
+            owner = (item.get("owner") or "").lower()
+
+            if not url or "featureserver" not in url.lower():
+                continue
+            if "permit" not in title:
+                continue
+            if any(word in title for word in DISCOVERY_EXCLUDE):
+                continue
+            if not any(
+                word in title + " " + owner
+                for word in ["louisville", "jefferson", "lojic"]
+            ):
+                continue
+
+            found.append(url)
+
+    # De-duplicate, preserve order
+    seen = set()
+    unique = []
+    for url in found:
+        if url.lower() not in seen:
+            seen.add(url.lower())
+            unique.append(url)
+
+    print(f"Discovery found {len(unique)} candidate permit services.")
+    return unique
+
+
+def candidate_layer_urls():
+    """
+    Known layer URLs first, then discovered services (expanding
+    each service into its individual layers).
+    """
+
+    candidates = list(LOUISVILLE_LAYER_URLS)
+
+    try:
+        for service_url in discover_louisville_services():
+
+            # Already points at a specific layer
+            if service_url.split("/")[-1].isdigit():
+                candidates.append(service_url)
+                continue
+
+            # Expand the service into its layers
+            try:
+                info = http_get_json(service_url + "?f=json")
+                for layer in (info.get("layers") or [])[:6]:
+                    layer_id = layer.get("id")
+                    if layer_id is not None:
+                        candidates.append(
+                            f"{service_url}/{layer_id}"
+                        )
+            except Exception:
+                candidates.append(service_url + "/0")
+
+    except Exception as error:
+        print(f"  WARNING: discovery failed entirely: {error}")
+
+    # De-duplicate, preserve order, cap the probe list
+    seen = set()
+    unique = []
+    for url in candidates:
+        if url.lower() not in seen:
+            seen.add(url.lower())
+            unique.append(url)
+
+    return unique[:12]
+
+
+def looks_like_permits(rows):
+    """True if the rows have permit-ish and issue-date-ish fields."""
+    if not rows:
+        return False
+    keys = " ".join(
+        rows[0].get("attributes", {}).keys()
+    ).lower()
+    return "permit" in keys and "issue" in keys
+
 def fetch_arcgis_features(layer_url, max_records=20_000):
     """
     Page through an ArcGIS feature layer, newest rows first,
@@ -540,39 +660,76 @@ def build_louisville_projects():
                 newest = issued
         return newest
 
-    # Download every candidate layer, then use whichever one
-    # actually has the freshest permits.
-    best_rows = []
+    # Probe every candidate with a cheap 1000-row sample
+    # (newest-first), then fully download only the freshest one.
     best_newest = None
+    best_url = None
+    best_rows = []
 
-    for layer_url in LOUISVILLE_LAYER_URLS:
+    for layer_url in candidate_layer_urls():
         try:
-            print(f"Trying Louisville layer:\n  {layer_url}")
-            rows = fetch_arcgis_features(layer_url)
+            print(f"Probing layer:\n  {layer_url}")
+            rows = fetch_arcgis_features(
+                layer_url, max_records=1000
+            )
 
             if not rows:
-                print("  ...returned no rows.")
+                print("  ...no rows.")
+                continue
+
+            if not looks_like_permits(rows):
+                print("  ...doesn't look like permit data, skipping.")
                 continue
 
             newest = newest_issue_date(rows)
             print(
-                f"  ...{len(rows)} rows, newest permit date: "
+                f"  ...{len(rows)} rows sampled, newest permit: "
                 f"{newest.date() if newest else 'UNPARSEABLE'}"
             )
 
             if newest and (best_newest is None or newest > best_newest):
-                best_rows = rows
                 best_newest = newest
+                best_url = layer_url
+                best_rows = rows
 
-            # A layer with data inside the lookback window is good
-            # enough - no need to download the rest.
-            if newest and within_lookback(newest):
+            # A feed current within the last week is the live one -
+            # stop probing.
+            age_days = (
+                (datetime.now(timezone.utc) - newest).days
+                if newest else 9999
+            )
+            if age_days <= 7:
+                print("  ...fresh feed found - using this layer.")
                 break
 
         except Exception as error:
-            print(f"  WARNING: layer failed ({error}), trying next URL.")
+            print(f"  WARNING: probe failed ({error}).")
 
-    features = best_rows
+    features = []
+
+    if best_url:
+        print(
+            f"Best source (newest permit "
+            f"{best_newest.date() if best_newest else 'unknown'}):\n"
+            f"  {best_url}"
+        )
+        if within_lookback(best_newest):
+            print("Downloading full dataset from best source...")
+            try:
+                features = fetch_arcgis_features(
+                    best_url, max_records=20_000
+                )
+            except Exception as error:
+                print(f"  Full download failed ({error}); "
+                      f"using probe sample.")
+                features = best_rows
+        else:
+            print(
+                "WARNING: even the best source is stale - "
+                "using its sample so the dashboard isn't empty."
+            )
+            features = best_rows
+
     print(f"Using {len(features)} Louisville permit records.")
 
     projects = []
