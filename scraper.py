@@ -87,6 +87,8 @@ EXCLUDE_KEYWORDS = [
     "swimming pool",
     "above ground pool",
     "inground pool",
+    "poolspa",
+    "pool spa",
     "shed",
     "carport",
     "demolition",
@@ -644,6 +646,126 @@ def get_field(attributes, *names):
     return None
 
 
+def louisville_record(attributes):
+    """
+    Map one Louisville permit record to a project dict.
+    Handles BOTH the legacy schema (PERMITNUMBER, ISSUEDATE...)
+    and the new data.lojic.org schema (PERMIT_NUMBER, ISSUE_DATE...).
+    Returns (project, skip_reason): exactly one is None.
+    """
+
+    permit_number = clean_text(
+        get_field(
+            attributes,
+            "PERMIT_NUMBER", "PERMITNUMBER", "PermitNumber",
+        )
+    )
+    permit_type = clean_text(
+        get_field(
+            attributes,
+            "PERMIT_TYPE", "PERMITTYPE", "PermitType",
+        )
+    )
+    category = clean_text(
+        get_field(
+            attributes,
+            "CATEGORY_NAME", "CATEGORYNAME", "CategoryName",
+        )
+    )
+    work_type = clean_text(
+        get_field(
+            attributes,
+            "WORK_TYPE", "WORKTYPE", "WorkType",
+        )
+    )
+    status = clean_text(
+        get_field(
+            attributes,
+            "PERMIT_STATUS", "STATUS", "Status",
+        )
+    )
+    contractor = clean_text(
+        get_field(attributes, "CONTRACTOR", "Contractor")
+    )
+    address = clean_text(get_field(attributes, "ADDRESS", "Address"))
+    city = clean_text(
+        get_field(attributes, "CITY", "City")
+    ) or "Louisville"
+    zipcode = clean_text(get_field(attributes, "ZIPCODE", "ZipCode"))
+    neighborhood = clean_text(
+        get_field(attributes, "NEIGHBORHOOD", "Neighborhood")
+    )
+    square_feet = get_field(
+        attributes, "SQFT", "SQUAREFEET", "SquareFeet"
+    )
+
+    value_numeric = parse_money(
+        get_field(
+            attributes,
+            "PROJECT_COSTS", "PROJECTCOSTS", "ProjectCosts",
+        )
+    )
+
+    issued = parse_date(
+        get_field(
+            attributes,
+            "ISSUE_DATE", "ISSUEDATE", "IssueDate", "ISSUEDDATE",
+        )
+    )
+
+    latitude = get_field(attributes, "LATITUDE", "Latitude", "LAT")
+    longitude = get_field(
+        attributes, "LONGITUDE", "Longitude", "LON", "LONG"
+    )
+
+    combined_text = " ".join([permit_type, category, work_type])
+
+    if is_excluded(combined_text):
+        return None, "excluded type"
+    if value_numeric < MIN_VALUE:
+        return None, "below min value"
+
+    description = " - ".join(
+        part for part in [permit_type, work_type] if part
+    ) or "Construction Permit"
+
+    title_use = category or permit_type or "Project"
+    project_name = f"{title_use} - {address}" if address else title_use
+
+    return {
+        "project": project_name,
+        "address": address,
+        "city": city,
+        "county": "Jefferson",
+        "state": "KY",
+        "zipcode": zipcode,
+        "neighborhood": neighborhood,
+        "square_feet": square_feet,
+        "latitude": safe_float(latitude),
+        "longitude": safe_float(longitude),
+        "type": permit_type or "Building",
+        "market": classify_market(
+            description, category, permit_type, work_type
+        ),
+        "work_class": work_type or "Unknown",
+        "proposed_use": category or "Unknown",
+        "status": status or "Active",
+        "value": format_money(value_numeric),
+        "value_numeric": value_numeric,
+        "permit_number": permit_number,
+        "issued_date": (
+            issued.strftime("%Y-%m-%dT%H:%M:%S.000")
+            if issued else "Unknown"
+        ),
+        "description": description,
+        "contractor": contractor or "Unknown",
+        "contractors": [contractor] if contractor else [],
+        "source": LOUISVILLE_SOURCE_LABEL,
+        "source_url": LOUISVILLE_PORTAL_URL,
+        "_issued": issued,
+    }, None
+
+
 def build_louisville_projects():
 
     def newest_issue_date(rows):
@@ -653,7 +775,8 @@ def build_louisville_projects():
             issued = parse_date(
                 get_field(
                     row.get("attributes", {}),
-                    "ISSUEDATE", "IssueDate", "ISSUEDDATE",
+                    "ISSUE_DATE", "ISSUEDATE",
+                    "IssueDate", "ISSUEDDATE",
                 )
             )
             if issued and (newest is None or issued > newest):
@@ -738,94 +861,13 @@ def build_louisville_projects():
     for feature in features:
         attributes = feature.get("attributes", {})
 
-        permit_number = clean_text(
-            get_field(attributes, "PERMITNUMBER", "PermitNumber")
-        )
-        permit_type = clean_text(
-            get_field(attributes, "PERMITTYPE", "PermitType")
-        )
-        category = clean_text(
-            get_field(attributes, "CATEGORYNAME", "CategoryName")
-        )
-        work_type = clean_text(
-            get_field(attributes, "WORKTYPE", "WorkType")
-        )
-        status = clean_text(get_field(attributes, "STATUS", "Status"))
-        contractor = clean_text(
-            get_field(attributes, "CONTRACTOR", "Contractor")
-        )
-        address = clean_text(get_field(attributes, "ADDRESS", "Address"))
-        city = clean_text(
-            get_field(attributes, "CITY", "City")
-        ) or "Louisville"
-        zipcode = clean_text(get_field(attributes, "ZIPCODE", "ZipCode"))
-        neighborhood = clean_text(
-            get_field(attributes, "NEIGHBORHOOD", "Neighborhood")
-        )
-        square_feet = get_field(attributes, "SQUAREFEET", "SquareFeet")
+        project, skip_reason = louisville_record(attributes)
 
-        value_numeric = parse_money(
-            get_field(attributes, "PROJECTCOSTS", "ProjectCosts")
-        )
-
-        issued = parse_date(
-            get_field(attributes, "ISSUEDATE", "IssueDate", "ISSUEDDATE")
-        )
-
-        latitude = get_field(attributes, "Latitude", "LAT")
-        longitude = get_field(attributes, "Longitude", "LON", "LONG")
-
-        combined_text = " ".join(
-            [permit_type, category, work_type]
-        )
-
-        # Filters (date handled after the loop so we can fall back)
-        if is_excluded(combined_text):
-            skipped["excluded type"] += 1
-            continue
-        if value_numeric < MIN_VALUE:
-            skipped["below min value"] += 1
+        if skip_reason:
+            skipped[skip_reason] = skipped.get(skip_reason, 0) + 1
             continue
 
-        description = " - ".join(
-            part for part in [permit_type, work_type] if part
-        ) or "Construction Permit"
-
-        title_use = category or permit_type or "Project"
-        project_name = f"{title_use} - {address}" if address else title_use
-
-        projects.append({
-            "project": project_name,
-            "address": address,
-            "city": city,
-            "county": "Jefferson",
-            "state": "KY",
-            "zipcode": zipcode,
-            "neighborhood": neighborhood,
-            "square_feet": square_feet,
-            "latitude": safe_float(latitude),
-            "longitude": safe_float(longitude),
-            "type": permit_type or "Building",
-            "market": classify_market(
-                description, category, permit_type, work_type
-            ),
-            "work_class": work_type or "Unknown",
-            "proposed_use": category or "Unknown",
-            "status": status or "Active",
-            "value": format_money(value_numeric),
-            "value_numeric": value_numeric,
-            "permit_number": permit_number,
-            "issued_date": (
-                issued.strftime("%Y-%m-%dT%H:%M:%S.000")
-                if issued else "Unknown"
-            ),
-            "description": description,
-            "contractor": contractor or "Unknown",
-            "contractors": [contractor] if contractor else [],
-            "source": LOUISVILLE_SOURCE_LABEL,
-            "source_url": LOUISVILLE_PORTAL_URL,
-            "_issued": issued,
-        })
+        projects.append(project)
 
     for reason, count in skipped.items():
         print(f"  Skipped {count} records ({reason}).")
@@ -895,6 +937,53 @@ def build_csv_projects():
 
         with open(path, "r", encoding="utf-8-sig", newline="") as file:
             reader = csv.DictReader(file)
+
+            fieldnames = [
+                clean_text(name).upper()
+                for name in (reader.fieldnames or [])
+            ]
+
+            # Raw export straight from data.lojic.org? Route it
+            # through the Louisville mapper - no reformatting needed.
+            if (
+                "PERMIT_NUMBER" in fieldnames
+                and "ISSUE_DATE" in fieldnames
+            ):
+                print(
+                    "  ...detected raw Louisville/LOJIC export - "
+                    "mapping automatically."
+                )
+
+                skipped = {}
+                raw_kept = []
+
+                for row in reader:
+                    project, skip_reason = louisville_record(row)
+
+                    if skip_reason:
+                        skipped[skip_reason] = (
+                            skipped.get(skip_reason, 0) + 1
+                        )
+                        continue
+
+                    if not within_lookback(project["_issued"]):
+                        skipped["outside lookback"] = (
+                            skipped.get("outside lookback", 0) + 1
+                        )
+                        continue
+
+                    project.pop("_issued", None)
+                    raw_kept.append(project)
+
+                for reason, count in skipped.items():
+                    print(f"  Skipped {count} rows ({reason}).")
+
+                print(
+                    f"  Kept {len(raw_kept)} projects from "
+                    f"this export."
+                )
+                projects.extend(raw_kept)
+                continue
 
             for row in reader:
                 row = {
