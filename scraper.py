@@ -19,6 +19,7 @@ import csv
 import glob
 import json
 import os
+import re
 import urllib.parse
 import urllib.request
 from datetime import datetime, timedelta, timezone
@@ -34,17 +35,12 @@ from datetime import datetime, timedelta, timezone
 LOUISVILLE_LAYER_URLS = [
     (
         "https://services1.arcgis.com/79kfd2K6fskCAkyg/arcgis/rest/"
-        "services/Louisville_Metro_KY_Active_Construction_Permits/"
+        "services/Louisville_Metro_KY_All_Permits_(Historical)/"
         "FeatureServer/0"
     ),
     (
         "https://services1.arcgis.com/79kfd2K6fskCAkyg/arcgis/rest/"
         "services/Louisville_Metro_KY_Active_Permits/"
-        "FeatureServer/0"
-    ),
-    (
-        "https://services1.arcgis.com/79kfd2K6fskCAkyg/arcgis/rest/"
-        "services/Louisville_Metro_KY_All_Permits_(Historical)/"
         "FeatureServer/0"
     ),
 ]
@@ -181,7 +177,22 @@ def parse_date(value):
         except ValueError:
             continue
 
-    return None
+    # Regex fallback: catches any remaining Y/M/D or M/D/Y style
+    # (e.g. "2026/07/28 00:00:00+00") regardless of separators.
+    match = re.search(r"(\d{4})[-/](\d{1,2})[-/](\d{1,2})", text)
+    if match:
+        year, month, day = (int(g) for g in match.groups())
+    else:
+        match = re.search(r"(\d{1,2})[-/](\d{1,2})[-/](\d{4})", text)
+        if match:
+            month, day, year = (int(g) for g in match.groups())
+        else:
+            return None
+
+    try:
+        return datetime(year, month, day, tzinfo=timezone.utc)
+    except ValueError:
+        return None
 
 
 def http_get_json(url, timeout=60):
@@ -454,6 +465,14 @@ def fetch_arcgis_features(layer_url, max_records=20_000):
     except Exception:
         pass
 
+    if order_field:
+        print(f"  (ordering newest-first by {order_field})")
+    else:
+        print(
+            "  (WARNING: could not read layer info - rows will "
+            "arrive oldest-first, newest data may be missed)"
+        )
+
     features = []
     offset = 0
     page_size = 1000
@@ -507,21 +526,24 @@ def get_field(attributes, *names):
 
 def build_louisville_projects():
 
-    def has_recent_data(rows):
-        """True if any of the first rows was issued in the window."""
-        for row in rows[:300]:
+    def newest_issue_date(rows):
+        """Most recent parseable issue date in the rows, or None."""
+        newest = None
+        for row in rows:
             issued = parse_date(
                 get_field(
                     row.get("attributes", {}),
                     "ISSUEDATE", "IssueDate", "ISSUEDDATE",
                 )
             )
-            if issued is not None and within_lookback(issued):
-                return True
-        return False
+            if issued and (newest is None or issued > newest):
+                newest = issued
+        return newest
 
-    features = []
-    backup_features = []
+    # Download every candidate layer, then use whichever one
+    # actually has the freshest permits.
+    best_rows = []
+    best_newest = None
 
     for layer_url in LOUISVILLE_LAYER_URLS:
         try:
@@ -529,29 +551,29 @@ def build_louisville_projects():
             rows = fetch_arcgis_features(layer_url)
 
             if not rows:
-                print("  ...returned no rows, trying next URL.")
+                print("  ...returned no rows.")
                 continue
 
-            if has_recent_data(rows):
-                print(f"  ...has recent permits. Using this layer.")
-                features = rows
-                break
-
+            newest = newest_issue_date(rows)
             print(
-                "  ...responded but has no permits in the lookback "
-                "window (stale snapshot?). Keeping as backup."
+                f"  ...{len(rows)} rows, newest permit date: "
+                f"{newest.date() if newest else 'UNPARSEABLE'}"
             )
-            if not backup_features:
-                backup_features = rows
+
+            if newest and (best_newest is None or newest > best_newest):
+                best_rows = rows
+                best_newest = newest
+
+            # A layer with data inside the lookback window is good
+            # enough - no need to download the rest.
+            if newest and within_lookback(newest):
+                break
 
         except Exception as error:
             print(f"  WARNING: layer failed ({error}), trying next URL.")
 
-    if not features and backup_features:
-        print("No layer had recent data; using best available backup.")
-        features = backup_features
-
-    print(f"Downloaded {len(features)} Louisville permit records.")
+    features = best_rows
+    print(f"Using {len(features)} Louisville permit records.")
 
     projects = []
     skipped = {"excluded type": 0, "below min value": 0}
@@ -656,23 +678,31 @@ def build_louisville_projects():
         if within_lookback(project["_issued"])
     ]
 
-    if recent:
-        print(
-            f"Kept {len(recent)} Louisville projects "
-            f"issued in the last {DAYS_BACK} days."
-        )
+    print(
+        f"{len(recent)} Louisville projects issued "
+        f"in the last {DAYS_BACK} days."
+    )
+
+    if len(recent) >= 25:
         kept = recent
     elif projects:
+        # Too few recent permits (stale feed or slow period):
+        # top up with the highest-value permits regardless of date
+        # so the dashboard is always useful.
         print(
-            f"WARNING: no permits within the last {DAYS_BACK} days - "
-            f"this layer may be a point-in-time snapshot. "
-            f"Keeping the {FALLBACK_KEEP} highest-value permits instead."
+            f"Fewer than 25 recent permits - topping up with the "
+            f"highest-value permits (up to {FALLBACK_KEEP} total)."
         )
-        projects.sort(
+        recent_keys = {id(project) for project in recent}
+        others = [
+            project for project in projects
+            if id(project) not in recent_keys
+        ]
+        others.sort(
             key=lambda item: item["value_numeric"],
             reverse=True,
         )
-        kept = projects[:FALLBACK_KEEP]
+        kept = recent + others[: max(FALLBACK_KEEP - len(recent), 0)]
     else:
         print(
             "WARNING: zero Louisville projects survived filtering. "
