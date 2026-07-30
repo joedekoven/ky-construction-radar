@@ -1,5 +1,121 @@
 let allProjects = [];
+let visibleProjects = [];
 let mapMarkers = [];
+
+let sortKey = null;
+let sortDirection = "desc";
+
+
+/* =========================================================
+   SORTING
+========================================================= */
+
+const SORT_COLUMNS = {
+    project: {
+        get: project => (project.project || "").toLowerCase(),
+        type: "string",
+        firstClick: "asc"
+    },
+    market: {
+        get: project => (project.market || "").toLowerCase(),
+        type: "string",
+        firstClick: "asc"
+    },
+    county: {
+        get: project => (project.county || "").toLowerCase(),
+        type: "string",
+        firstClick: "asc"
+    },
+    issued: {
+        get: project => {
+            const time = Date.parse(project.issued_date);
+            return Number.isNaN(time) ? null : time;
+        },
+        type: "number",
+        firstClick: "desc"
+    },
+    status: {
+        get: project => (project.status || "").toLowerCase(),
+        type: "string",
+        firstClick: "asc"
+    },
+    value: {
+        get: project => project.value_numeric ?? null,
+        type: "number",
+        firstClick: "desc"
+    },
+    distance: {
+        get: project => project.distance_miles ?? null,
+        type: "number",
+        firstClick: "asc"
+    },
+    contractor: {
+        get: project => (project.contractor || "").toLowerCase(),
+        type: "string",
+        firstClick: "asc"
+    },
+    opportunity: {
+        get: project => project.opportunity_score ?? null,
+        type: "number",
+        firstClick: "desc"
+    }
+};
+
+
+function sortProjects(projects) {
+
+    if (!sortKey || !SORT_COLUMNS[sortKey]) {
+        return projects;
+    }
+
+    const column = SORT_COLUMNS[sortKey];
+    const direction = sortDirection === "asc" ? 1 : -1;
+
+    return [...projects].sort((a, b) => {
+
+        const valueA = column.get(a);
+        const valueB = column.get(b);
+
+        // Missing values always sink to the bottom
+        const missingA =
+            valueA === null || valueA === "";
+        const missingB =
+            valueB === null || valueB === "";
+
+        if (missingA && missingB) return 0;
+        if (missingA) return 1;
+        if (missingB) return -1;
+
+        if (column.type === "number") {
+            return (valueA - valueB) * direction;
+        }
+
+        return String(valueA)
+            .localeCompare(String(valueB)) * direction;
+    });
+}
+
+
+function updateSortIndicators() {
+
+    document
+        .querySelectorAll("th.sortable")
+        .forEach(header => {
+
+            header.classList.remove(
+                "sorted-asc",
+                "sorted-desc"
+            );
+
+            if (header.dataset.sort === sortKey) {
+                header.classList.add(
+                    sortDirection === "asc"
+                        ? "sorted-asc"
+                        : "sorted-desc"
+                );
+            }
+        });
+}
 
 
 /* =========================================================
@@ -43,11 +159,11 @@ async function loadProjects() {
         }
 
         allProjects = await response.json();
+        visibleProjects = allProjects;
 
         populateFilters();
-        updateSummary(allProjects);
-        renderProjects(allProjects);
-        renderMapMarkers(allProjects);
+        applyFilters();
+        updateFreshnessStamp(allProjects);
 
     } catch (error) {
 
@@ -192,6 +308,84 @@ function updateSummary(projects) {
    PROJECT TABLE
 ========================================================= */
 
+function formatIssuedDate(raw) {
+
+    if (!raw || raw === "Unknown") {
+        return "Unknown";
+    }
+
+    const parsed = new Date(raw);
+
+    if (Number.isNaN(parsed.getTime())) {
+        return raw;
+    }
+
+    return parsed.toLocaleDateString(
+        "en-US",
+        { month: "short", day: "numeric", year: "numeric" }
+    );
+}
+
+
+function exportVisibleToCsv() {
+
+    const rows = currentlyVisibleProjects();
+
+    if (!rows.length) {
+        return;
+    }
+
+    const columns = [
+        ["Permit #", project => project.permit_number],
+        ["Project", project => project.project],
+        ["Address", project => project.address],
+        ["City", project => project.city],
+        ["County", project => project.county],
+        ["Market", project => project.market],
+        ["Status", project => project.status],
+        ["Issued", project => formatIssuedDate(project.issued_date)],
+        ["Value", project => project.value],
+        ["Distance", project => project.distance],
+        ["Contractor", project => project.contractor],
+        ["Opportunity", project => project.opportunity],
+        ["Why", project => project.opportunity_reason],
+    ];
+
+    const csvEscape = value => {
+        const text = String(value ?? "");
+        return `"${text.replace(/"/g, '""')}"`;
+    };
+
+    const lines = [
+        columns.map(column => csvEscape(column[0])).join(",")
+    ];
+
+    rows.forEach(project => {
+        lines.push(
+            columns
+                .map(column => csvEscape(column[1](project)))
+                .join(",")
+        );
+    });
+
+    const blob = new Blob(
+        [lines.join("\r\n")],
+        { type: "text/csv;charset=utf-8;" }
+    );
+
+    const link = document.createElement("a");
+
+    const stamp = new Date()
+        .toISOString()
+        .slice(0, 10);
+
+    link.href = URL.createObjectURL(blob);
+    link.download = `ky-construction-radar-${stamp}.csv`;
+    link.click();
+
+    URL.revokeObjectURL(link.href);
+}
+
 function renderProjects(projects) {
 
     const tableBody =
@@ -233,6 +427,11 @@ function renderProjects(projects) {
                 ${escapeHtml(
                     project.project || "Unknown"
                 )}
+                <div class="permit-sub">
+                    ${escapeHtml(
+                        project.permit_number || ""
+                    )}
+                </div>
             </td>
 
             <td>
@@ -244,6 +443,12 @@ function renderProjects(projects) {
             <td>
                 ${escapeHtml(
                     project.county || "Unknown"
+                )}
+            </td>
+
+            <td>
+                ${escapeHtml(
+                    formatIssuedDate(project.issued_date)
                 )}
             </td>
 
@@ -526,6 +731,24 @@ function createProjectPopup(project) {
                     </strong>
                 </div>
 
+                <div>
+                    <span>Permit #</span>
+                    <strong>
+                        ${escapeHtml(
+                            project.permit_number || "Unknown"
+                        )}
+                    </strong>
+                </div>
+
+                <div>
+                    <span>Issued</span>
+                    <strong>
+                        ${escapeHtml(
+                            formatIssuedDate(project.issued_date)
+                        )}
+                    </strong>
+                </div>
+
             </div>
 
             <div class="popup-opportunity">
@@ -543,6 +766,20 @@ function createProjectPopup(project) {
                 )}
             </div>
 
+            <a
+                class="popup-source-link"
+                href="https://www.google.com/maps/dir/?api=1&destination=${
+                    encodeURIComponent(
+                        (project.address || "") + ", " +
+                        (project.city || "") + ", KY"
+                    )
+                }"
+                target="_blank"
+                rel="noopener"
+            >
+                Directions &rarr;
+            </a>
+            &nbsp;&nbsp;
             ${sourceButton}
 
         </div>
@@ -620,6 +857,29 @@ function applyFilters() {
             .getElementById("statusFilter")
             .value;
 
+    const minValue = Number(
+        document
+            .getElementById("valueFilter")
+            .value
+    ) || 0;
+
+    const maxDistance = Number(
+        document
+            .getElementById("distanceFilter")
+            .value
+    ) || 0;
+
+    const issuedDays = Number(
+        document
+            .getElementById("issuedFilter")
+            .value
+    ) || 0;
+
+    const issuedCutoff =
+        issuedDays > 0
+            ? Date.now() - issuedDays * 86400000
+            : 0;
+
 
     const filtered =
         allProjects.filter(project => {
@@ -630,6 +890,7 @@ function applyFilters() {
                 ${project.city || ""}
                 ${project.description || ""}
                 ${project.contractor || ""}
+                ${project.permit_number || ""}
             `.toLowerCase();
 
 
@@ -652,19 +913,60 @@ function applyFilters() {
                 project.status === status;
 
 
+            const matchesValue =
+                !minValue ||
+                (project.value_numeric || 0) >= minValue;
+
+
+            const matchesDistance =
+                !maxDistance ||
+                (
+                    project.distance_miles !== null &&
+                    project.distance_miles !== undefined &&
+                    project.distance_miles <= maxDistance
+                );
+
+
+            let matchesIssued = true;
+
+            if (issuedCutoff) {
+                const issuedTime =
+                    Date.parse(project.issued_date);
+
+                matchesIssued =
+                    !Number.isNaN(issuedTime) &&
+                    issuedTime >= issuedCutoff;
+            }
+
+
             return (
                 matchesSearch &&
                 matchesMarket &&
                 matchesCounty &&
-                matchesStatus
+                matchesStatus &&
+                matchesValue &&
+                matchesDistance &&
+                matchesIssued
             );
 
         });
 
 
-    updateSummary(filtered);
-    renderProjects(filtered);
-    renderMapMarkers(filtered);
+    const sorted = sortProjects(filtered);
+
+    visibleProjects = sorted;
+
+    updateSummary(sorted);
+    renderProjects(sorted);
+    renderMapMarkers(sorted);
+    updateSortIndicators();
+}
+
+
+function currentlyVisibleProjects() {
+    return visibleProjects.length
+        ? visibleProjects
+        : allProjects;
 }
 
 
@@ -717,6 +1019,72 @@ document
         "change",
         applyFilters
     );
+
+
+["valueFilter", "distanceFilter", "issuedFilter"]
+    .forEach(id => {
+        document
+            .getElementById(id)
+            .addEventListener("change", applyFilters);
+    });
+
+
+document
+    .querySelectorAll("th.sortable")
+    .forEach(header => {
+
+        header.addEventListener("click", () => {
+
+            const key = header.dataset.sort;
+
+            if (sortKey === key) {
+                // Same column: flip direction
+                sortDirection =
+                    sortDirection === "asc"
+                        ? "desc"
+                        : "asc";
+            } else {
+                sortKey = key;
+                sortDirection =
+                    SORT_COLUMNS[key]?.firstClick || "asc";
+            }
+
+            applyFilters();
+        });
+    });
+
+
+function updateFreshnessStamp(projects) {
+
+    const stampElement =
+        document.getElementById("dataUpdated");
+
+    if (!stampElement || !projects.length) {
+        return;
+    }
+
+    const newest = projects
+        .map(project => project.date_discovered)
+        .filter(Boolean)
+        .sort()
+        .pop();
+
+    if (newest) {
+        stampElement.innerText =
+            `Data updated ${formatIssuedDate(newest)}`;
+    }
+}
+
+
+const exportButton =
+    document.getElementById("exportCsv");
+
+if (exportButton) {
+    exportButton.addEventListener(
+        "click",
+        exportVisibleToCsv
+    );
+}
 
 
 loadProjects();
