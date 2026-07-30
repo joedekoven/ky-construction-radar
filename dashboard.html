@@ -557,6 +557,80 @@
             font-weight: 700;
         }
 
+        th.sortable {
+            cursor: pointer;
+            user-select: none;
+
+            transition: color .15s ease;
+        }
+
+        th.sortable:hover {
+            color: var(--text);
+        }
+
+        th.sortable::after {
+            content: "";
+
+            display: inline-block;
+
+            margin-left: 6px;
+
+            opacity: .8;
+        }
+
+        th.sortable.sorted-asc::after {
+            content: "\25B2";
+            color: var(--accent);
+            font-size: 8px;
+        }
+
+        th.sortable.sorted-desc::after {
+            content: "\25BC";
+            color: var(--accent);
+            font-size: 8px;
+        }
+
+        .permit-sub {
+            margin-top: 3px;
+
+            color: var(--text-muted);
+
+            font-size: 10.5px;
+            letter-spacing: .4px;
+        }
+
+        .export-button {
+            height: 38px;
+
+            padding: 0 16px;
+
+            background: var(--accent-soft);
+            color: var(--accent);
+
+            border: 1px solid rgba(240, 180, 41, .35);
+            border-radius: 8px;
+
+            font-family: inherit;
+            font-size: 12.5px;
+            font-weight: 650;
+
+            cursor: pointer;
+
+            transition:
+                background .2s ease,
+                border-color .2s ease,
+                transform .1s ease;
+        }
+
+        .export-button:hover {
+            background: rgba(240, 180, 41, .2);
+            border-color: rgba(240, 180, 41, .55);
+        }
+
+        .export-button:active {
+            transform: translateY(1px);
+        }
+
         /* =========================
            EMPTY MESSAGE
         ========================= */
@@ -795,6 +869,14 @@
                 </div>
             </div>
 
+            <button
+                id="exportCsv"
+                class="export-button"
+                type="button"
+            >
+                Export CSV
+            </button>
+
         </div>
 
 
@@ -826,6 +908,32 @@
                 </option>
             </select>
 
+            <select id="valueFilter">
+                <option value="">Any Value</option>
+                <option value="100000">$100K+</option>
+                <option value="250000">$250K+</option>
+                <option value="500000">$500K+</option>
+                <option value="1000000">$1M+</option>
+                <option value="5000000">$5M+</option>
+                <option value="20000000">$20M+</option>
+            </select>
+
+            <select id="distanceFilter">
+                <option value="">Any Distance</option>
+                <option value="10">Within 10 mi</option>
+                <option value="25">Within 25 mi</option>
+                <option value="50">Within 50 mi</option>
+                <option value="100">Within 100 mi</option>
+            </select>
+
+            <select id="issuedFilter">
+                <option value="">Any Issue Date</option>
+                <option value="7">Last 7 days</option>
+                <option value="30">Last 30 days</option>
+                <option value="90">Last 90 days</option>
+                <option value="365">Last year</option>
+            </select>
+
         </div>
 
 
@@ -838,14 +946,15 @@
                 <thead>
 
                     <tr>
-                        <th>Project</th>
-                        <th>Market</th>
-                        <th>County</th>
-                        <th>Status</th>
-                        <th>Value</th>
-                        <th>Distance</th>
-                        <th>Contractor</th>
-                        <th>Opportunity</th>
+                        <th class="sortable" data-sort="project">Project</th>
+                        <th class="sortable" data-sort="market">Market</th>
+                        <th class="sortable" data-sort="county">County</th>
+                        <th class="sortable" data-sort="issued">Issued</th>
+                        <th class="sortable" data-sort="status">Status</th>
+                        <th class="sortable" data-sort="value">Value</th>
+                        <th class="sortable" data-sort="distance">Distance</th>
+                        <th class="sortable" data-sort="contractor">Contractor</th>
+                        <th class="sortable" data-sort="opportunity">Opportunity</th>
                     </tr>
 
                 </thead>
@@ -878,6 +987,8 @@
             <span class="status-dot"></span>
             Automated project data active
         </div>
+
+        <div id="dataUpdated"></div>
 
         <div>
             Kentucky Construction Intelligence
