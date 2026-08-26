@@ -10,5 +10,13 @@
   "106 WOOD|LOUISVILLE|KY": {
     "latitude": 38.248926038284,
     "longitude": -85.597715423162
+  },
+  "7320 WIGEON WAY|PROSPECT|KY": {
+    "latitude": null,
+    "longitude": null
+  },
+  "3390 SUMMERFIELD DR|LOUISVILLE|KY": {
+    "latitude": 38.201135352736,
+    "longitude": -85.614952269847
   }
 }
