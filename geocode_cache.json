@@ -18,5 +18,9 @@
   "3390 SUMMERFIELD DR|LOUISVILLE|KY": {
     "latitude": 38.201135352736,
     "longitude": -85.614952269847
+  },
+  "8025 HAPPY JACK WAY|LOUISVILLE|KY": {
+    "latitude": null,
+    "longitude": null
   }
 }
