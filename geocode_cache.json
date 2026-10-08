@@ -62,5 +62,9 @@
   "8850 SANCTUARY LN|LOUISVILLE|KY": {
     "latitude": 38.122188133702,
     "longitude": -85.578982277106
+  },
+  "8900 SANCTUARY LN|LOUISVILLE|KY": {
+    "latitude": null,
+    "longitude": null
   }
 }
