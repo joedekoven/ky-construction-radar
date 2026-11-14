@@ -66,5 +66,9 @@
   "8900 SANCTUARY LN|LOUISVILLE|KY": {
     "latitude": null,
     "longitude": null
+  },
+  "1122 LOGAN ST|LOUISVILLE|KY": {
+    "latitude": 38.23445849767,
+    "longitude": -85.739817699222
   }
 }
